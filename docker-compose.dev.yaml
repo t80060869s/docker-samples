@@ -1,0 +1,152 @@
+services:
+  nginx:
+    build:
+      context: ./nginx
+    container_name: ai_job_nginx_dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - ai_job_network
+    environment:
+      # Эти переменные будут использованы в шаблоне nginx.conf.template
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - N8N_DOMAIN_NAME=${N8N_DOMAIN_NAME}
+      - ADMIN_DOMAIN_NAME=${ADMIN_DOMAIN_NAME}
+      - API_DOMAIN_NAME=${API_DOMAIN_NAME}
+    depends_on:
+      fastapi:
+        condition: service_healthy
+      appsmith:
+        condition: service_started
+      n8n:
+        condition: service_started
+
+  fastapi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: ai_job_fastapi_app_dev
+    working_dir: /workspace/backend
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/workspace/backend
+      - N8N_URL=https://${N8N_DOMAIN_NAME}/
+    volumes:
+      - .:/workspace
+      - vscode_data:/home/vscode
+      - /etc/localtime:/etc/localtime:ro
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: /workspace/backend/entrypoint.sh
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    networks:
+      - ai_job_network
+
+  postgres:
+    image: postgres:17.6-alpine3.22
+    container_name: ai_job_postgres_dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ai_job_network
+
+  n8n:
+    image: n8nio/n8n:1.112.5
+    container_name: ai_job_n8n_dev
+    restart: unless-stopped
+    expose:
+      - "5678"
+    env_file:
+      - .env
+    environment:
+      - WEBHOOK_URL=https://${N8N_DOMAIN_NAME}/
+      - N8N_PROXY_HOPS=1
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${POSTGRES_HOST}
+      - DB_POSTGRESDB_PORT=${POSTGRES_PORT}
+      - DB_POSTGRESDB_DATABASE=${N8N_DB_NAME}
+      - DB_POSTGRESDB_USER=${N8N_DB_USER}
+      - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
+      - GENERIC_TIMEZONE=${TIMEZONE}
+      - TZ=${TIMEZONE}
+    volumes:
+      - n8n_dev_data:/home/node/.n8n
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "/usr/bin/wget --server-response --proxy off --no-verbose --tries=1 --timeout=3 127.0.0.1:5678/healthz -O /dev/null 2>&1 | grep -q 'HTTP/1.1 200 OK'" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - ai_job_network
+
+  appsmith:
+    restart: unless-stopped
+    image: index.docker.io/appsmith/appsmith-ce:v1.86-hotfix
+    container_name: ai_job_appsmith_dev
+    expose:
+      - "80"
+    extra_hosts:
+      - "${DOMAIN_NAME}:host-gateway"
+      - "${N8N_DOMAIN_NAME}:host-gateway"
+      - "${ADMIN_DOMAIN_NAME}:host-gateway"
+      - "${API_DOMAIN_NAME}:host-gateway"
+    env_file:
+      - .env
+    volumes:
+      - appsmith_dev_data:/appsmith-stacks
+      - ~/.local/share/mkcert/rootCA.pem:/appsmith-stacks/ca-certs/rootCA.crt
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost/api/v1/users/features || exit 1" ]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    networks:
+      - ai_job_network
+
+networks:
+  ai_job_network:
+    driver: bridge
+
+volumes:
+  vscode_data:
+  postgres_dev_data:
+  appsmith_dev_data:
+  n8n_dev_data:

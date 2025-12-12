@@ -1,0 +1,107 @@
+# Апстримы для наших сервисов
+upstream fastapi_server { server fastapi:8000; }
+upstream n8n_server { server n8n:5678; }
+upstream appsmith_server { server appsmith:80; }
+
+# --- СЕРВЕР ДЛЯ ПЕРЕНАПРАВЛЕНИЯ НА HTTPS ---
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME} ${N8N_DOMAIN_NAME} ${ADMIN_DOMAIN_NAME} ${API_DOMAIN_NAME};
+    # Этот сервер будет ловить HTTP трафик для всех доменов и редиректить на HTTPS
+    return 301 https://$host$request_uri;
+}
+
+
+# --- СЕРВЕР ДЛЯ АДМИНКИ APPSMITH ---
+server {
+    listen 443 ssl http2;
+    server_name ${ADMIN_DOMAIN_NAME};
+
+    # Сертификаты (используем те же)
+    ssl_certificate /etc/nginx/certs/aijobagent.local.pem;
+    ssl_certificate_key /etc/nginx/certs/aijobagent.local-key.pem;
+
+    # Общие настройки для проксирования
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+
+    # Проксирование на админку Appsmith.
+    location / {
+        proxy_pass http://appsmith_server;
+    }
+}
+
+
+# --- СЕРВЕР ДЛЯ ОПУБЛИКОВАННОГО ПРИЛОЖЕНИЯ APPSMITH ---
+server {
+    listen 443 ssl http2;
+    server_name ${DOMAIN_NAME};
+
+    # Сертификаты (используем те же)
+    ssl_certificate /etc/nginx/certs/aijobagent.local.pem;
+    ssl_certificate_key /etc/nginx/certs/aijobagent.local-key.pem;
+    
+    root /usr/share/nginx/html;
+    index index.appsmith.html;
+
+    # Главная страница - iframe
+    location = / {
+        try_files $uri $uri/ /index.appsmith.html;
+    }
+}
+
+
+# --- СЕРВЕР ДЛЯ N8N ---
+server {
+    listen 443 ssl http2;
+    server_name ${N8N_DOMAIN_NAME};
+
+    # Сертификаты (используем те же)
+    ssl_certificate /etc/nginx/certs/aijobagent.local.pem;
+    ssl_certificate_key /etc/nginx/certs/aijobagent.local-key.pem;
+    
+    # Общие настройки для проксирования
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+
+    # Проксирование на n8n
+    location / {
+        proxy_pass http://n8n_server;
+    }
+}
+
+
+# --- СЕРВЕР ДЛЯ API ---
+server {
+    listen 443 ssl http2;
+    server_name ${API_DOMAIN_NAME};
+
+    # Сертификаты (используем те же)
+    ssl_certificate /etc/nginx/certs/aijobagent.local.pem;
+    ssl_certificate_key /etc/nginx/certs/aijobagent.local-key.pem;
+    
+    # Общие настройки для проксирования
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+
+    # Проксирование на FastAPI
+    location / {
+        proxy_pass http://fastapi_server;
+    }
+}

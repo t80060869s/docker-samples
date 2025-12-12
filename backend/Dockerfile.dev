@@ -1,0 +1,37 @@
+# Используем легковесный Python
+FROM python:3.12-slim
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Устанавливаем системные зависимости и создаем пользователя 'vscode'
+# Это решает проблемы с правами доступа в Dev Containers
+RUN apt-get update && apt-get install -y \
+    build-essential curl git netcat-openbsd python3-venv sudo bash && \
+    # Создаем группу и пользователя 'vscode' со стандартным UID/GID 1000
+    groupadd --gid 1000 vscode && \
+    useradd --uid 1000 --gid 1000 -m vscode --shell /bin/bash && \
+    # Добавляем пользователя в группу sudo и разрешаем беспарольный sudo
+    adduser vscode sudo && \
+    echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers && \
+    # Очищаем кэш apt
+    rm -rf /var/lib/apt/lists/*
+
+# Копируем файлы зависимостей
+COPY pyproject.toml poetry.lock /app/
+
+# Устанавливаем зависимости от имени root, чтобы они были доступны глобально
+RUN pip install --upgrade pip \
+    && pip install poetry \
+    && poetry config virtualenvs.create false \
+    && poetry install --no-root --only main,dev
+
+# Меняем владельца директории /app и /workspace на нового пользователя
+# /workspace будет создана при монтировании, но мы можем подготовить права
+RUN chown -R vscode:vscode /app && mkdir -p /workspace && chown -R vscode:vscode /workspace
+
+# Переключаемся на non-root пользователя
+USER vscode
+
+# Команда по умолчанию для dev
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
